@@ -1,64 +1,71 @@
-import telebot
-import requests
-import re
 import os
+import re
+import requests
+import threading
+from flask import Flask
+from telegram import Update
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# === Environment Variables ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Your Telegram bot token
+# ============ YOUR SETTINGS ============
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 SMARTBET_KEY = os.getenv("SMARTBET_KEY", "bcbwb-4d65eeb3-05af-4eb2-8cc7-6216f6622d22")
-IFTTT_WEBHOOK_URL = os.getenv("IFTTT_WEBHOOK_URL", "https://maker.ifttt.com/trigger/telegram_alert/with/key/c6QsqQqCIl9LzH6X2Oo04yAbYvsAfrCLP44qy9_sCt2")
-
-# === Default Betting Config ===
+STAKE = os.getenv("STAKE", "5")
 SPORT = "SOCCER"
-BET = "UNDER 0.5"
-STAKE = "5"
-BOOK = "PINNACLE"
 SOURCE = "smb.Vantage08>TelegramAlerts"
+BOOK = "PINNACLE"
+# ======================================
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+SMARTBET_URL = "https://smartbet.io/postpick.php"
+app = Flask(__name__)
 
-def extract_event(message_text):
-    """Extracts match name line containing 'vs'."""
-    lines = message_text.split('\n')
+@app.route('/')
+def home():
+    return "✅ Telegram → SmartBet bot is running!"
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text
+    if "Snore-fest" not in text or "Under 0.5" not in text:
+        return
+
+    # Extract event (3rd line)
+    lines = text.strip().split("\n")
+    event = ""
     for line in lines:
-        if " vs " in line.lower():
-            return line.strip()
-    return None
+        if "vs" in line or "VS" in line:
+            event = line.replace(" vs ", " - ").replace(" VS ", " - ").strip()
+            break
 
-def send_to_smartbet(event_name):
-    """Send data to Smartbet.io via POST."""
-    url = "https://smartbet.io/postpick.php"
+    if not event:
+        print("⚠️ Event not found in message.")
+        return
+
+    # Create SmartBet payload
     payload = {
         "key": SMARTBET_KEY,
         "sport": SPORT,
-        "event": event_name,
-        "bet": BET,
+        "event": event,
+        "bet": "UNDER 0.5",
+        "odds": "auto",  # SmartBet will use Pinnacle odds
         "stake": STAKE,
         "book": BOOK,
         "source": SOURCE
     }
+
     try:
-        response = requests.post(url, json=payload)
-        print("✅ Sent to Smartbet:", response.text)
+        r = requests.post(SMARTBET_URL, json=payload, timeout=10)
+        print(f"✅ Sent bet for {event}: {r.text}")
     except Exception as e:
-        print("❌ Error sending to Smartbet:", e)
+        print(f"❌ Error sending bet: {e}")
 
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    text = message.text.strip()
-    event_name = extract_event(text)
+def run_telegram_bot():
+    app_telegram = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    handler = MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+    app_telegram.add_handler(handler)
+    app_telegram.run_polling()
 
-    if event_name:
-        # Format for IFTTT display
-        formatted_text = f"/ifttt\n{text}"
-        requests.post(IFTTT_WEBHOOK_URL, json={"value1": formatted_text})
-        print("📩 Sent to IFTTT:", formatted_text)
-
-        # Send bet to Smartbet
-        send_to_smartbet(event_name)
-        bot.reply_to(message, f"✅ Bet sent for event:\n{event_name}")
-    else:
-        print("⚠️ No event detected in message.")
-
-print("🤖 Bot running...")
-bot.polling(non_stop=True)
+if __name__ == "__main__":
+    threading.Thread(target=run_telegram_bot).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
