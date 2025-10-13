@@ -3,6 +3,7 @@ import re
 import json
 import asyncio
 import requests
+import threading
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -84,22 +85,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         send_to_ifttt(alert_data["event"], alert_data["bet"], alert_data["odds"])
         await update.message.reply_text("✅ Bet forwarded to IFTTT → SmartBet.io")
 
-# === MAIN TELEGRAM RUN FUNCTION ===
+# === TELEGRAM BOT RUNNER (async safe) ===
 async def run_telegram_bot():
+    print("🤖 Telegram → IFTTT bridge initializing...")
     app_bot = Application.builder().token(BOT_TOKEN).build()
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🤖 Telegram → IFTTT bridge running...")
-    await app_bot.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    # Initialize & start safely (Render-friendly)
+    await app_bot.initialize()
+    await app_bot.start()
+    print("✅ Telegram bot is now polling for messages...")
+    await app_bot.updater.start_polling()
+    await app_bot.updater.idle()
 
 # === ENTRYPOINT ===
 if __name__ == "__main__":
-    # Run Flask in background via asyncio
-    loop = asyncio.get_event_loop()
+    # Run Flask on a separate thread
+    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=10000)).start()
 
-    async def main():
-        # Start Telegram bot concurrently with Flask
-        from threading import Thread
-        Thread(target=lambda: app.run(host="0.0.0.0", port=10000)).start()
-        await run_telegram_bot()
-
-    loop.run_until_complete(main())
+    # Run the Telegram bot in the main asyncio loop
+    asyncio.run(run_telegram_bot())
