@@ -1,70 +1,66 @@
 import os
-import re
 import requests
-import threading
 from flask import Flask
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-# ================== CONFIG ==================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-SMARTBET_KEY = os.getenv("SMARTBET_KEY", "bcbwb-4d65eeb3-05af-4eb2-8cc7-6216f6622d22")
+# --- Load environment variables ---
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+SMARTBET_KEY = os.getenv("SMARTBET_KEY")
+SPORT = os.getenv("SPORT", "SOCCER")
+BET_TYPE = os.getenv("BET_TYPE", "UNDER 0.5")
+BOOK = os.getenv("BOOK", "PINNACLE")
 STAKE = os.getenv("STAKE", "5")
-SPORT = "SOCCER"
 SOURCE = "smb.Vantage08>TelegramAlerts"
-BOOK = "PINNACLE"
-SMARTBET_URL = "https://smartbet.io/postpick.php"
-# ===========================================
 
+# --- Flask app for Render pinging ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ Telegram → SmartBet bot is running!"
+    return "Telegram → SmartBet bot is running successfully!"
 
+# --- Telegram message handler ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    text = update.message.text
-    if "Snore-fest" not in text or "Under 0.5" not in text:
+    message = update.message.text.strip()
+
+    # Skip messages from the bot itself
+    if update.message.from_user.is_bot:
         return
 
-    # Extract event (line with "vs" or "VS")
-    lines = text.strip().split("\n")
-    event = ""
-    for line in lines:
-        if "vs" in line or "VS" in line:
-            event = line.replace(" vs ", " - ").replace(" VS ", " - ").strip()
-            break
+    print(f"Received Telegram message: {message}")
 
-    if not event:
-        print("⚠️ No event detected in message.")
-        return
+    # Format the event from the alert message
+    event = message.replace("\n", " ").strip()
 
+    # Send to SmartBet.io via POST
     payload = {
         "key": SMARTBET_KEY,
         "sport": SPORT,
         "event": event,
-        "bet": "UNDER 0.5",
-        "odds": "auto",  # SmartBet uses Pinnacle odds automatically
+        "bet": BET_TYPE,
         "stake": STAKE,
         "book": BOOK,
         "source": SOURCE
     }
 
     try:
-        r = requests.post(SMARTBET_URL, json=payload, timeout=10)
-        print(f"✅ Bet sent for {event}: {r.text}")
+        response = requests.post("https://smartbet.io/postpick.php", json=payload)
+        print(f"Sent to SmartBet.io | Status: {response.status_code}, Response: {response.text}")
     except Exception as e:
-        print(f"❌ Error sending bet: {e}")
+        print(f"Error sending to SmartBet.io: {e}")
 
+# --- Start Telegram bot ---
 def run_telegram_bot():
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    handler = MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    application.add_handler(handler)
-    application.run_polling()
+    print("Starting Telegram bot...")
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app_bot.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    import threading
     threading.Thread(target=run_telegram_bot).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
