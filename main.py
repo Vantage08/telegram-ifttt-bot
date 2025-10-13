@@ -1,58 +1,72 @@
 import os
-import requests
-import asyncio
+import logging
+from flask import Flask
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import requests
 
-# === Environment Variables ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# Logging setup
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Environment variables
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SMARTBET_KEY = os.getenv("SMARTBET_KEY")
 SPORT = os.getenv("SPORT", "SOCCER")
-BOOK = os.getenv("BOOK", "PINNACLE")
-STAKE = os.getenv("STAKE", "5")
 BET_TYPE = os.getenv("BET_TYPE", "UNDER 0.5")
+STAKE = os.getenv("STAKE", "5")
+BOOK = os.getenv("BOOK", "PINNACLE")
 SOURCE = os.getenv("SOURCE", "smb.Vantage08>TelegramAlerts")
 
-# === Telegram Handlers ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot is running and ready to forward bets to SmartBet.io!")
+# Flask app (for Render web service)
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "✅ Telegram–SmartBet Bot is running!"
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if not text:
+    """Triggered when a Telegram message is received."""
+    if not update.message or not update.message.text:
         return
 
-    # Simple trigger detection: "Over/Under" or “Odds”
-    if "Over/Under" in text and "Odds" in text:
-        # Extract event name (you can refine this regex later)
-        lines = text.split("\n")
-        event_line = next((l for l in lines if "vs" in l), None)
-        event = event_line.replace("vs", "-").strip() if event_line else "Unknown Match"
+    message_text = update.message.text.strip()
+    logger.info(f"Received message: {message_text}")
 
-        # Send bet to SmartBet.io
-        payload = {
-            "key": SMARTBET_KEY,
-            "sport": SPORT,
-            "event": event,
-            "bet": BET_TYPE,
-            "odds": "auto",  # Smartbet will fetch Pinnacle odds
-            "stake": STAKE,
-            "book": BOOK,
-            "source": SOURCE,
-        }
+    # Simple extraction (for now we just send a fixed bet to SmartBet)
+    payload = {
+        "key": SMARTBET_KEY,
+        "sport": SPORT,
+        "event": "AUTO-DETECTED EVENT",
+        "bet": BET_TYPE,
+        "odds": "1.90",
+        "stake": STAKE,
+        "book": BOOK,
+        "source": SOURCE
+    }
 
+    try:
         response = requests.post("https://smartbet.io/postpick.php", json=payload)
-        if response.status_code == 200:
-            await update.message.reply_text(f"✅ Bet placed for {event}")
-        else:
-            await update.message.reply_text(f"⚠️ Error placing bet: {response.text}")
+        logger.info(f"SmartBet response: {response.text}")
+        await update.message.reply_text("✅ Bet sent to SmartBet.io!")
+    except Exception as e:
+        logger.error(f"Failed to send bet: {e}")
+        await update.message.reply_text("❌ Failed to send bet to SmartBet.io.")
 
-# === Main ===
-async def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    await app.run_polling()
+def start_bot():
+    """Start the Telegram bot."""
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    logger.info("🚀 Starting Telegram bot polling...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import threading
+
+    # Run the Telegram bot in a background thread
+    threading.Thread(target=start_bot, daemon=True).start()
+
+    # Run Flask web server for Render
+    app.run(host="0.0.0.0", port=10000)
