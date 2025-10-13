@@ -1,80 +1,58 @@
 import os
-import threading
-import asyncio
 import requests
-from flask import Flask
+import asyncio
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- Load environment variables ---
+# === Environment Variables ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-BET_TYPE = os.getenv("BET_TYPE")
-BOOK = os.getenv("BOOK")
-SPORT = os.getenv("SPORT")
-STAKE = os.getenv("STAKE")
 SMARTBET_KEY = os.getenv("SMARTBET_KEY")
+SPORT = os.getenv("SPORT", "SOCCER")
+BOOK = os.getenv("BOOK", "PINNACLE")
+STAKE = os.getenv("STAKE", "5")
+BET_TYPE = os.getenv("BET_TYPE", "UNDER 0.5")
+SOURCE = os.getenv("SOURCE", "smb.Vantage08>TelegramAlerts")
 
-# --- Flask web app (to keep Render alive) ---
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "✅ Telegram bot is running successfully on Render!"
-
-# --- Telegram bot handlers ---
+# === Telegram Handlers ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot is live and ready to send SmartBet alerts!")
+    await update.message.reply_text("Bot is running and ready to forward bets to SmartBet.io!")
 
-async def betinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Test command to confirm environment variables are loaded correctly"""
-    message = (
-        f"📊 Current Configuration:\n"
-        f"- Bet Type: {BET_TYPE}\n"
-        f"- Book: {BOOK}\n"
-        f"- Sport: {SPORT}\n"
-        f"- Stake: {STAKE}\n"
-        f"- SmartBet Key: {SMARTBET_KEY[:5]}****"
-    )
-    await update.message.reply_text(message)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text:
+        return
 
-# --- Function to fetch SmartBet data and send alerts ---
-async def send_smartbet_alert(application: Application):
-    try:
-        url = f"https://api.smartbet.io/{SPORT}?book={BOOK}&betType={BET_TYPE}"
-        headers = {"Authorization": SMARTBET_KEY}
-        response = requests.get(url, headers=headers, timeout=10)
-        data = response.json()
+    # Simple trigger detection: "Over/Under" or “Odds”
+    if "Over/Under" in text and "Odds" in text:
+        # Extract event name (you can refine this regex later)
+        lines = text.split("\n")
+        event_line = next((l for l in lines if "vs" in l), None)
+        event = event_line.replace("vs", "-").strip() if event_line else "Unknown Match"
 
-        if not data:
-            print("No SmartBet data found.")
-            return
+        # Send bet to SmartBet.io
+        payload = {
+            "key": SMARTBET_KEY,
+            "sport": SPORT,
+            "event": event,
+            "bet": BET_TYPE,
+            "odds": "auto",  # Smartbet will fetch Pinnacle odds
+            "stake": STAKE,
+            "book": BOOK,
+            "source": SOURCE,
+        }
 
-        message = f"⚽ SmartBet Alert ({SPORT})\n\n"
-        for item in data[:5]:  # Example: show first 5 matches
-            message += f"{item['home']} vs {item['away']} - {item['pick']} @ {item['odds']}\n"
+        response = requests.post("https://smartbet.io/postpick.php", json=payload)
+        if response.status_code == 200:
+            await update.message.reply_text(f"✅ Bet placed for {event}")
+        else:
+            await update.message.reply_text(f"⚠️ Error placing bet: {response.text}")
 
-        # Send to your Telegram bot (you can specify a chat_id here)
-        await application.bot.send_message(chat_id=update.effective_chat.id, text=message)
-
-    except Exception as e:
-        print(f"Error sending alert: {e}")
-
-# --- Telegram bot main function ---
+# === Main ===
 async def main():
-    app_bot = Application.builder().token(BOT_TOKEN).build()
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("betinfo", betinfo))
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    await app.run_polling()
 
-    print("🚀 Starting Telegram bot...")
-    await app_bot.run_polling()
-
-def run_telegram_bot():
+if __name__ == "__main__":
     asyncio.run(main())
-
-# --- Run both Flask and Telegram in parallel ---
-if __name__ == '__main__':
-    telegram_thread = threading.Thread(target=run_telegram_bot)
-    telegram_thread.start()
-
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
