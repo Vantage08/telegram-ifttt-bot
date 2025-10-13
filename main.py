@@ -1,7 +1,7 @@
 import os
 import re
 import json
-import threading
+import asyncio
 import requests
 from flask import Flask
 from telegram import Update
@@ -24,9 +24,9 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "Bot running via IFTTT bridge", 200
+    return "Bot running via IFTTT bridge ✅", 200
 
-# === PARSER ===
+# === PARSE ALERT FUNCTION ===
 def parse_alert(message_text):
     lines = message_text.split("\n")
 
@@ -73,10 +73,9 @@ def send_to_ifttt(event, bet, odds):
     except Exception as e:
         print(f"❌ Error sending to IFTTT: {e}")
 
-# === TELEGRAM HANDLER ===
+# === TELEGRAM MESSAGE HANDLER ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-
     if not text:
         return
 
@@ -85,14 +84,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         send_to_ifttt(alert_data["event"], alert_data["bet"], alert_data["odds"])
         await update.message.reply_text("✅ Bet forwarded to IFTTT → SmartBet.io")
 
-# === TELEGRAM BOT RUNNER ===
-def run_telegram_bot():
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# === MAIN TELEGRAM RUN FUNCTION ===
+async def run_telegram_bot():
+    app_bot = Application.builder().token(BOT_TOKEN).build()
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("🤖 Telegram → IFTTT bridge running...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    await app_bot.run_polling(allowed_updates=Update.ALL_TYPES)
 
-# === FLASK SERVER (for Render health check) ===
-if __name__ == '__main__':
-    threading.Thread(target=run_telegram_bot).start()
-    app.run(host='0.0.0.0', port=10000)
+# === ENTRYPOINT ===
+if __name__ == "__main__":
+    # Run Flask in background via asyncio
+    loop = asyncio.get_event_loop()
+
+    async def main():
+        # Start Telegram bot concurrently with Flask
+        from threading import Thread
+        Thread(target=lambda: app.run(host="0.0.0.0", port=10000)).start()
+        await run_telegram_bot()
+
+    loop.run_until_complete(main())
