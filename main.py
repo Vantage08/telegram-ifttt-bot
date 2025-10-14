@@ -74,15 +74,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         send_to_smartbet(alert_data["event"], alert_data["bet"])
         await update.message.reply_text(f"✅ Pick sent to SmartBet.io!")
 
-# === TELEGRAM BOT STARTUP ===
-def run_telegram_bot():
+# === START FLASK + TELEGRAM BOT ===
+if __name__ == '__main__':
+    # Run Flask in a background thread
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))).start()
+
+    # Run Telegram bot in the main thread
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("🤖 Telegram bot is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-# === START BOTH FLASK + TELEGRAM BOT ===
-if __name__ == '__main__':
-    threading.Thread(target=run_telegram_bot).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
