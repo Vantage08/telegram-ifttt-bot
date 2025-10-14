@@ -4,7 +4,7 @@ import threading
 import time
 from flask import Flask, request
 from telegram import Update, Bot
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, Dispatcher
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import requests
 import asyncio
 
@@ -64,7 +64,7 @@ def send_to_smartbet(event, bet):
         "sport": SPORT,
         "event": event,
         "bet": bet,
-        "odds": "0.0",
+        "odds": "0.0",  # use Pinnacle live odds
         "stake": STAKE,
         "book": BOOK,
         "source": SOURCE
