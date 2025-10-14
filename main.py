@@ -1,96 +1,88 @@
 import os
 import smtplib
-from email.mime.text import MIMEText
+from email.message import EmailMessage
 from flask import Flask, request
 from telegram import Update, Bot
-import asyncio
 
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")        # Your Gmail address
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")  # Gmail App Password
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://yourapp.onrender.com/<BOT_TOKEN>
+GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 SMARTBET_EMAIL = "picks@smartbet.io"
-SOURCE = "Kakason08"
-STAKE = "5"
-ODDS = "0.0"   # Let SmartBet.io use Pinnacle odds
-BOOK = "PINNACLE"
 
-# === INITIALIZE ===
+STAKE = 5
+BOOK = "Pinnacle"
+ODDS = 1.0
+SOURCE = os.getenv("SMARTBET_SOURCE", "Kakason08")
+
+# === FLASK APP ===
 app = Flask(__name__)
 bot = Bot(token=BOT_TOKEN)
 
-# === PARSE TELEGRAM ALERT ===
-def parse_alert(text):
+# === HELPER: Parse Telegram Alert ===
+def parse_alert(text: str):
     lines = text.split("\n")
-    event = None
     bet = None
+    event = None
+
     for line in lines:
         if line.lower().startswith("bet :"):
-            bet = line.split(":")[1].strip()
+            bet = line.split(":", 1)[1].strip()
         if " vs " in line.lower():
-            event = line.strip().replace(" vs ", " - ").replace(" VS ", " - ")
-    return event or "Unknown Event", bet or "UNKNOWN"
+            event = line.strip()
+    return bet, event
 
-# === SEND EMAIL TO SMARTBET.IO ===
-def send_email(event, bet):
+# === HELPER: Send email to SmartBet.io ===
+def send_email_to_smartbet(bet, event):
+    msg = EmailMessage()
+    msg["Subject"] = f"Pick: {bet} | {event}"
+    msg["From"] = GMAIL_ADDRESS
+    msg["To"] = SMARTBET_EMAIL
+
     body = f"""SPORT: Football
 EVENT: {event}
 BET: {bet}
 ODDS: {ODDS}
 STAKE: {STAKE}
 BOOK: {BOOK}
-SOURCE: {SOURCE}"""
-    
-    msg = MIMEText(body)
-    msg["Subject"] = f"Pick Submission: {event}"
-    msg["From"] = GMAIL_ADDRESS
-    msg["To"] = SMARTBET_EMAIL
+SOURCE: {SOURCE}
+"""
+    msg.set_content(body)
 
     try:
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        server.sendmail(GMAIL_ADDRESS, SMARTBET_EMAIL, msg.as_string())
-        server.quit()
-        print(f"✅ Email sent to SmartBet.io:\n{body}")
-        return True
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            smtp.send_message(msg)
+        print(f"✅ Pick sent via email to SmartBet.io:\n{body}")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
-        return False
+        print(f"❌ Failed to send pick: {e}")
 
-# === TELEGRAM WEBHOOK HANDLER ===
+# === FLASK ROUTE TO HANDLE TELEGRAM UPDATES ===
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
-def telegram_webhook():
+def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
-    asyncio.create_task(handle_message(update))
+    if update.message and update.message.text:
+        text = update.message.text
+        if "Bet :" in text:
+            bet, event = parse_alert(text)
+            if bet and event:
+                send_email_to_smartbet(bet, event)
+                bot.send_message(chat_id=update.message.chat_id, 
+                                 text=f"✅ Pick sent to SmartBet.io!\nEvent: {event}\nBet: {bet}")
     return "OK", 200
 
-async def handle_message(update: Update):
-    text = update.message.text if update.message else None
-    if not text:
-        return
-
-    if "Bet :" in text:
-        event, bet = parse_alert(text)
-        success = send_email(event, bet)
-        reply_text = "✅ Pick sent to SmartBet.io!" if success else "❌ Failed to send pick."
-        await bot.send_message(chat_id=update.message.chat_id, text=reply_text)
-
-# === FLASK HEALTH CHECK ===
+# === ROOT ROUTE FOR HEALTHCHECK ===
 @app.route("/")
 def index():
     return "Bot is running", 200
 
 # === SET TELEGRAM WEBHOOK ===
-async def setup_webhook():
-    webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
-    await bot.delete_webhook()
-    await bot.set_webhook(webhook_url)
-    print("🌐 Webhook set successfully!")
+def set_webhook():
+    bot.delete_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    print("🤖 Webhook set successfully!")
 
-# === RUN FLASK + SETUP WEBHOOK ===
 if __name__ == "__main__":
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(setup_webhook())
-    print("🌐 Flask server running...")
+    set_webhook()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
