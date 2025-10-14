@@ -2,25 +2,25 @@ import os
 import requests
 from flask import Flask, request
 from telegram import Update, Bot
+import asyncio
 
 # === CONFIGURATION ===
-TOKEN = os.getenv("BOT_TOKEN")  # your Telegram bot token in Render env vars
-SMARTBET_KEY = os.getenv("SMARTBET_KEY")  # your SmartBet API key
+TOKEN = os.getenv("BOT_TOKEN")  # Telegram bot token
+SMARTBET_KEY = os.getenv("SMARTBET_KEY")  # SmartBet API key
 SPORT = "SOCCER"
 STAKE = "5"
 BOOK = "PINNACLE"
-SOURCE = "Vantage08>TelegramAlerts"  # your SmartBet source name
+SOURCE = "Vantage08>TelegramAlerts"
 SMARTBET_URL = "https://smartbet.io/postpick.php"
 
 app = Flask(__name__)
 bot = Bot(token=TOKEN)
 
-# === HEALTH CHECK ===
 @app.route("/")
 def home():
     return "✅ Bot is running!", 200
 
-# === HANDLE TELEGRAM UPDATES (WEBHOOK) ===
+
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), bot)
@@ -29,7 +29,6 @@ def webhook():
     if not message:
         return "ok"
 
-    # Simple parse — extract bet and event
     bet = None
     event = None
     for line in message.split("\n"):
@@ -44,7 +43,7 @@ def webhook():
             "sport": SPORT,
             "event": event,
             "bet": bet,
-            "odds": "0.0",  # let SmartBet use Pinnacle odds
+            "odds": "0.0",
             "stake": STAKE,
             "book": BOOK,
             "source": SOURCE
@@ -53,20 +52,26 @@ def webhook():
         try:
             r = requests.post(SMARTBET_URL, data=payload)
             if r.status_code == 200:
-                update.message.reply_text(f"✅ Pick sent to SmartBet.io! ({event} | {bet})")
+                bot.send_message(chat_id=update.message.chat_id,
+                                 text=f"✅ Pick sent to SmartBet.io! ({event} | {bet})")
                 print(f"✅ SmartBet.io Response: {r.text}")
             else:
-                update.message.reply_text(f"❌ SmartBet.io error: {r.status_code}")
+                bot.send_message(chat_id=update.message.chat_id,
+                                 text=f"❌ SmartBet.io error: {r.status_code}")
                 print(f"❌ SmartBet.io Error: {r.text}")
         except Exception as e:
-            update.message.reply_text(f"⚠️ Error: {e}")
+            bot.send_message(chat_id=update.message.chat_id, text=f"⚠️ Error: {e}")
             print(f"⚠️ Exception sending to SmartBet.io: {e}")
 
     return "ok"
 
+
 if __name__ == "__main__":
-    # Set Telegram webhook
-    bot.delete_webhook()
-    bot.set_webhook(url=f"https://telegram-ifttt-bot.onrender.com/{TOKEN}")
-    print("🤖 Webhook set successfully!")
+    async def setup_webhook():
+        await bot.delete_webhook()
+        await bot.set_webhook(url=f"https://telegram-ifttt-bot.onrender.com/{TOKEN}")
+        print("🤖 Webhook set successfully!")
+
+    asyncio.run(setup_webhook())
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
