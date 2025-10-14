@@ -16,6 +16,7 @@ SMARTBET_URL = "https://smartbet.io/postpick.php"
 app = Flask(__name__)
 bot = Bot(token=TOKEN)
 
+
 @app.route("/")
 def home():
     return "✅ Bot is running!", 200
@@ -52,26 +53,37 @@ def webhook():
         try:
             r = requests.post(SMARTBET_URL, data=payload)
             if r.status_code == 200:
-                bot.send_message(chat_id=update.message.chat_id,
-                                 text=f"✅ Pick sent to SmartBet.io! ({event} | {bet})")
+                bot.send_message(
+                    chat_id=update.message.chat_id,
+                    text=f"✅ Pick sent to SmartBet.io! ({event} | {bet})"
+                )
                 print(f"✅ SmartBet.io Response: {r.text}")
             else:
-                bot.send_message(chat_id=update.message.chat_id,
-                                 text=f"❌ SmartBet.io error: {r.status_code}")
+                bot.send_message(
+                    chat_id=update.message.chat_id,
+                    text=f"❌ SmartBet.io error: {r.status_code}"
+                )
                 print(f"❌ SmartBet.io Error: {r.text}")
         except Exception as e:
-            bot.send_message(chat_id=update.message.chat_id, text=f"⚠️ Error: {e}")
+            bot.send_message(
+                chat_id=update.message.chat_id,
+                text=f"⚠️ Error: {e}"
+            )
             print(f"⚠️ Exception sending to SmartBet.io: {e}")
 
     return "ok"
 
 
+async def setup_webhook():
+    """Ensure the webhook is cleanly set before starting Flask"""
+    await bot.delete_webhook()
+    await bot.set_webhook(url=f"https://telegram-ifttt-bot.onrender.com/{TOKEN}")
+    print("🤖 Webhook set successfully!")
+
+
 if __name__ == "__main__":
-    async def setup_webhook():
-        await bot.delete_webhook()
-        await bot.set_webhook(url=f"https://telegram-ifttt-bot.onrender.com/{TOKEN}")
-        print("🤖 Webhook set successfully!")
+    # Run async webhook setup before Flask
+    asyncio.get_event_loop().run_until_complete(setup_webhook())
 
-    asyncio.run(setup_webhook())
-
+    # Start Flask app
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
