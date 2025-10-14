@@ -1,89 +1,53 @@
-import os
-import requests
-from flask import Flask, request
-from telegram import Update, Bot
-import asyncio
+import telebot
+import smtplib
+from email.mime.text import MIMEText
 
-# === CONFIGURATION ===
-TOKEN = os.getenv("BOT_TOKEN")  # Telegram bot token
-SMARTBET_KEY = os.getenv("SMARTBET_KEY")  # SmartBet API key
-SPORT = "SOCCER"
-STAKE = "5"
-BOOK = "PINNACLE"
-SOURCE = "Vantage08>TelegramAlerts"
-SMARTBET_URL = "https://smartbet.io/postpick.php"
+# === CONFIG ===
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+SENDER_EMAIL = "youremail@gmail.com"  # same email registered on SmartBet.io
+APP_PASSWORD = "your_16_char_app_password"  # Gmail app password
+SMARTBET_EMAIL = "picks@smartbet.io"
+SMARTBET_SOURCE = "Kakason08"
 
-app = Flask(__name__)
-bot = Bot(token=TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN)
 
+def send_email_to_smartbet(sport, event, bet, odds, stake, book):
+    """Send formatted SmartBet pick email"""
+    body = f"""SPORT: {sport}
+EVENT: {event}
+BET: {bet}
+ODDS: {odds}
+STAKE: {stake}
+BOOK: {book}
+SOURCE: {SMARTBET_SOURCE}
+"""
 
-@app.route("/")
-def home():
-    return "✅ Bot is running!", 200
+    msg = MIMEText(body)
+    msg['Subject'] = f"SmartBet Pick: {event}"
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = SMARTBET_EMAIL
 
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(SENDER_EMAIL, APP_PASSWORD)
+            server.sendmail(SENDER_EMAIL, SMARTBET_EMAIL, msg.as_string())
+        return "✅ Pick email sent successfully to SmartBet.io!"
+    except Exception as e:
+        return f"❌ Email sending failed: {str(e)}"
 
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    message = update.message.text if update.message else ""
+# === TELEGRAM BOT HANDLER ===
+@bot.message_handler(commands=['sendpick'])
+def handle_sendpick(message):
+    bot.reply_to(message, "Please enter your pick in this format:\n\nSPORT|EVENT|BET|ODDS|STAKE|BOOK")
 
-    if not message:
-        return "ok"
+@bot.message_handler(func=lambda m: "|" in m.text)
+def handle_pick(message):
+    try:
+        sport, event, bet, odds, stake, book = [x.strip() for x in message.text.split("|")]
+        result = send_email_to_smartbet(sport, event, bet, odds, stake, book)
+        bot.reply_to(message, result)
+    except Exception as e:
+        bot.reply_to(message, f"❌ Invalid format or error: {e}")
 
-    bet = None
-    event = None
-    for line in message.split("\n"):
-        if line.lower().startswith("bet :"):
-            bet = line.split(":")[1].strip().upper()
-        if " vs " in line.lower():
-            event = line.strip().replace(" vs ", " - ").replace(" VS ", " - ")
-
-    if bet and event:
-        payload = {
-            "key": SMARTBET_KEY,
-            "sport": SPORT,
-            "event": event,
-            "bet": bet,
-            "odds": "0.0",
-            "stake": STAKE,
-            "book": BOOK,
-            "source": SOURCE
-        }
-
-        try:
-            r = requests.post(SMARTBET_URL, data=payload)
-            if r.status_code == 200:
-                bot.send_message(
-                    chat_id=update.message.chat_id,
-                    text=f"✅ Pick sent to SmartBet.io! ({event} | {bet})"
-                )
-                print(f"✅ SmartBet.io Response: {r.text}")
-            else:
-                bot.send_message(
-                    chat_id=update.message.chat_id,
-                    text=f"❌ SmartBet.io error: {r.status_code}"
-                )
-                print(f"❌ SmartBet.io Error: {r.text}")
-        except Exception as e:
-            bot.send_message(
-                chat_id=update.message.chat_id,
-                text=f"⚠️ Error: {e}"
-            )
-            print(f"⚠️ Exception sending to SmartBet.io: {e}")
-
-    return "ok"
-
-
-async def setup_webhook():
-    """Ensure the webhook is cleanly set before starting Flask"""
-    await bot.delete_webhook()
-    await bot.set_webhook(url=f"https://telegram-ifttt-bot.onrender.com/{TOKEN}")
-    print("🤖 Webhook set successfully!")
-
-
-if __name__ == "__main__":
-    # Run async webhook setup before Flask
-    asyncio.get_event_loop().run_until_complete(setup_webhook())
-
-    # Start Flask app
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+print("🤖 SmartBet Email Bot is running...")
+bot.infinity_polling()
