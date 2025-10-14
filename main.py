@@ -1,115 +1,72 @@
 import os
-import json
-import threading
-from flask import Flask
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import requests
+from flask import Flask, request
+from telegram import Update, Bot
 
 # === CONFIGURATION ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-SMARTBET_KEY = os.getenv("SMARTBET_KEY")
-SPORT = os.getenv("SPORT", "SOCCER")
-STAKE = os.getenv("STAKE", "5")
-BOOK = os.getenv("BOOK", "PINNACLE")
-SOURCE = os.getenv("SOURCE", "Vantage08>TelegramAlerts")
-LOG_FILE = os.getenv("LOG_FILE", "smartbet_picks.log")
-
+TOKEN = os.getenv("BOT_TOKEN")  # your Telegram bot token in Render env vars
+SMARTBET_KEY = os.getenv("SMARTBET_KEY")  # your SmartBet API key
+SPORT = "SOCCER"
+STAKE = "5"
+BOOK = "PINNACLE"
+SOURCE = "Vantage08>TelegramAlerts"  # your SmartBet source name
 SMARTBET_URL = "https://smartbet.io/postpick.php"
 
-# === FLASK HEALTH CHECK ===
 app = Flask(__name__)
+bot = Bot(token=TOKEN)
 
-@app.route('/')
-def index():
-    return "Bot is running", 200
+# === HEALTH CHECK ===
+@app.route("/")
+def home():
+    return "✅ Bot is running!", 200
 
-# === PARSE TELEGRAM ALERT ===
-def parse_alert(message_text):
-    lines = message_text.split("\n")
-    event = None
+# === HANDLE TELEGRAM UPDATES (WEBHOOK) ===
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    message = update.message.text if update.message else ""
+
+    if not message:
+        return "ok"
+
+    # Simple parse — extract bet and event
     bet = None
-
-    # Find bet type (e.g. "Bet : Under 0.5")
-    for line in lines:
+    event = None
+    for line in message.split("\n"):
         if line.lower().startswith("bet :"):
-            bet = line.split(":", 1)[1].strip().upper()
-            break
-
-    # Find event (e.g. "Team A vs Team B")
-    for line in lines:
+            bet = line.split(":")[1].strip().upper()
         if " vs " in line.lower():
             event = line.strip().replace(" vs ", " - ").replace(" VS ", " - ")
-            break
 
-    return {"event": event or "Unknown Event", "bet": bet or "UNKNOWN"}
+    if bet and event:
+        payload = {
+            "key": SMARTBET_KEY,
+            "sport": SPORT,
+            "event": event,
+            "bet": bet,
+            "odds": "0.0",  # let SmartBet use Pinnacle odds
+            "stake": STAKE,
+            "book": BOOK,
+            "source": SOURCE
+        }
 
-# === SEND PICK TO SMARTBET.IO ===
-def send_to_smartbet(event, bet):
-    payload = {
-        "key": SMARTBET_KEY,
-        "sport": SPORT,
-        "event": event,
-        "bet": bet,
-        "odds": "0.0",   # Let SmartBet.io use Pinnacle live odds
-        "stake": STAKE,
-        "book": BOOK,
-        "source": SOURCE
-    }
-
-    try:
-        # ✅ Use GET method (matches SmartBet.io API example)
-        response = requests.get(SMARTBET_URL, params=payload, timeout=10)
-        print(f"✅ Sent to SmartBet.io: {response.url}")
-        print(f"🔄 SmartBet Response: {response.text}")
-
-        # Try to extract Pick ID if JSON is returned
         try:
-            resp_json = response.json()
-            pickid = resp_json.get("pickid", "N/A")
-        except Exception:
-            pickid = "N/A"
+            r = requests.post(SMARTBET_URL, data=payload)
+            if r.status_code == 200:
+                update.message.reply_text(f"✅ Pick sent to SmartBet.io! ({event} | {bet})")
+                print(f"✅ SmartBet.io Response: {r.text}")
+            else:
+                update.message.reply_text(f"❌ SmartBet.io error: {r.status_code}")
+                print(f"❌ SmartBet.io Error: {r.text}")
+        except Exception as e:
+            update.message.reply_text(f"⚠️ Error: {e}")
+            print(f"⚠️ Exception sending to SmartBet.io: {e}")
 
-        # Log the result
-        with open(LOG_FILE, "a") as f:
-            f.write(json.dumps({
-                "event": event,
-                "bet": bet,
-                "pickid": pickid,
-                "response": response.text
-            }) + "\n")
+    return "ok"
 
-        return pickid
-
-    except Exception as e:
-        print(f"❌ Error sending to SmartBet.io: {e}")
-        return None
-
-# === TELEGRAM HANDLER ===
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if not text:
-        return
-
-    # Only process messages containing a bet
-    if "Bet :" in text:
-        alert_data = parse_alert(text)
-        pickid = send_to_smartbet(alert_data["event"], alert_data["bet"])
-
-        if pickid and pickid != "N/A":
-            await update.message.reply_text(f"✅ Pick sent to SmartBet.io! Pick ID: {pickid}")
-        else:
-            await update.message.reply_text("✅ Pick sent to SmartBet.io! (no Pick ID returned)")
-
-# === START FLASK + TELEGRAM BOT ===
-if __name__ == '__main__':
-    # Run Flask for health check in background
-    threading.Thread(
-        target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
-    ).start()
-
-    # Run Telegram bot
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🤖 Telegram bot is running...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+if __name__ == "__main__":
+    # Set Telegram webhook
+    bot.delete_webhook()
+    bot.set_webhook(url=f"https://telegram-ifttt-bot.onrender.com/{TOKEN}")
+    print("🤖 Webhook set successfully!")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
