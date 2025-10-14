@@ -12,7 +12,7 @@ SMARTBET_KEY = os.getenv("SMARTBET_KEY")
 SPORT = os.getenv("SPORT", "SOCCER")
 STAKE = os.getenv("STAKE", "5")
 BOOK = os.getenv("BOOK", "PINNACLE")
-SOURCE = os.getenv("SOURCE", "Telegram>Alerts")
+SOURCE = os.getenv("SOURCE", "Vantage08>TelegramAlerts")
 LOG_FILE = os.getenv("LOG_FILE", "smartbet_picks.log")
 
 SMARTBET_URL = "https://smartbet.io/postpick.php"
