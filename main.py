@@ -13,6 +13,7 @@ SPORT = os.getenv("SPORT", "SOCCER")
 STAKE = os.getenv("STAKE", "5")
 BOOK = os.getenv("BOOK", "PINNACLE")
 SOURCE = os.getenv("SOURCE", "Telegram>Alerts")
+LOG_FILE = os.getenv("LOG_FILE", "smartbet_picks.log")
 
 SMARTBET_URL = "https://smartbet.io/postpick.php"
 
@@ -43,7 +44,7 @@ def parse_alert(message_text):
 
     return {"event": event or "Unknown Event", "bet": bet or "UNKNOWN"}
 
-# === SEND PICK TO SMARTBET.IO ===
+# === SEND PICK TO SMARTBET.IO AND LOG PICK ID ===
 def send_to_smartbet(event, bet):
     payload = {
         "key": SMARTBET_KEY,
@@ -57,10 +58,26 @@ def send_to_smartbet(event, bet):
     }
     try:
         response = requests.post(SMARTBET_URL, json=payload)
+        resp_json = response.json()
+        pickid = resp_json.get("pickid", "N/A")
+
         print(f"✅ Sent to SmartBet.io: {json.dumps(payload)}")
         print(f"🔄 Response: {response.text}")
+        print(f"🆔 Pick ID: {pickid}")
+
+        # Log pick to file
+        with open(LOG_FILE, "a") as f:
+            f.write(json.dumps({
+                "event": event,
+                "bet": bet,
+                "pickid": pickid
+            }) + "\n")
+
+        return pickid
+
     except Exception as e:
         print(f"❌ Error sending to SmartBet.io: {e}")
+        return None
 
 # === TELEGRAM HANDLER ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,8 +88,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Only process messages containing a bet
     if "Bet :" in text:
         alert_data = parse_alert(text)
-        send_to_smartbet(alert_data["event"], alert_data["bet"])
-        await update.message.reply_text(f"✅ Pick sent to SmartBet.io!")
+        pickid = send_to_smartbet(alert_data["event"], alert_data["bet"])
+        if pickid:
+            await update.message.reply_text(f"✅ Pick sent to SmartBet.io! Pick ID: {pickid}")
+        else:
+            await update.message.reply_text("❌ Failed to send pick to SmartBet.io.")
 
 # === START FLASK + TELEGRAM BOT ===
 if __name__ == '__main__':
