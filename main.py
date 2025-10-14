@@ -1,6 +1,7 @@
 import os
 import json
 import threading
+import time
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
@@ -14,8 +15,10 @@ STAKE = os.getenv("STAKE", "5")
 BOOK = os.getenv("BOOK", "PINNACLE")
 SOURCE = os.getenv("SOURCE", "Telegram>Alerts")
 LOG_FILE = os.getenv("LOG_FILE", "smartbet_picks.log")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))  # seconds
 
-SMARTBET_URL = "https://smartbet.io/postpick.php"
+SMARTBET_POST_URL = "https://smartbet.io/postpick.php"
+SMARTBET_STATUS_URL = "https://smartbet.io/pickstatus.php"
 
 # === FLASK HEALTH CHECK ===
 app = Flask(__name__)
@@ -30,13 +33,11 @@ def parse_alert(message_text):
     event = None
     bet = None
 
-    # Bet type
     for line in lines:
         if line.lower().startswith("bet :"):
-            bet = line.split(":")[1].strip().upper()  # e.g., UNDER 0.5, 1, X, 2, HOME +1.5
+            bet = line.split(":")[1].strip().upper()
             break
 
-    # Event
     for line in lines:
         if " vs " in line.lower():
             event = line.strip().replace(" vs ", " - ").replace(" VS ", " - ")
@@ -51,27 +52,27 @@ def send_to_smartbet(event, bet):
         "sport": SPORT,
         "event": event,
         "bet": bet,
-        "odds": "0.0",   # Let SmartBet.io use Pinnacle live odds
+        "odds": "0.0",
         "stake": STAKE,
         "book": BOOK,
         "source": SOURCE
     }
     try:
-        response = requests.post(SMARTBET_URL, json=payload)
+        response = requests.post(SMARTBET_POST_URL, json=payload)
         resp_json = response.json()
-        pickid = resp_json.get("pickid", "N/A")
+        pickid = resp_json.get("pickid", None)
 
         print(f"✅ Sent to SmartBet.io: {json.dumps(payload)}")
         print(f"🔄 Response: {response.text}")
         print(f"🆔 Pick ID: {pickid}")
 
-        # Log pick to file
-        with open(LOG_FILE, "a") as f:
-            f.write(json.dumps({
-                "event": event,
-                "bet": bet,
-                "pickid": pickid
-            }) + "\n")
+        if pickid:
+            with open(LOG_FILE, "a") as f:
+                f.write(json.dumps({
+                    "event": event,
+                    "bet": bet,
+                    "pickid": pickid
+                }) + "\n")
 
         return pickid
 
@@ -79,27 +80,69 @@ def send_to_smartbet(event, bet):
         print(f"❌ Error sending to SmartBet.io: {e}")
         return None
 
+# === CHECK PICK STATUS ===
+def check_pick_status(bot, pickid):
+    try:
+        response = requests.post(SMARTBET_STATUS_URL, json={
+            "key": SMARTBET_KEY,
+            "pickid": str(pickid)
+        })
+        resp_json = response.json()
+        status = resp_json.get("processing_status", "UNKNOWN")
+        short_desc = resp_json.get("processing_result_short", "")
+        execution = resp_json.get("execution_result", "")
+
+        print(f"🔎 Pick ID {pickid} status: {status} - {short_desc} - {execution}")
+
+        # Notify Telegram if pick failed
+        if status != "PROCESSED":
+            bot.loop.create_task(
+                bot.bot.send_message(
+                    chat_id=bot.chat_id,
+                    text=f"⚠️ Pick ID {pickid} status: {status}\n{short_desc}\nExecution: {execution}"
+                )
+            )
+    except Exception as e:
+        print(f"❌ Error checking pick status for {pickid}: {e}")
+
 # === TELEGRAM HANDLER ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text:
         return
 
-    # Only process messages containing a bet
     if "Bet :" in text:
         alert_data = parse_alert(text)
         pickid = send_to_smartbet(alert_data["event"], alert_data["bet"])
         if pickid:
             await update.message.reply_text(f"✅ Pick sent to SmartBet.io! Pick ID: {pickid}")
+            # Save chat_id for notifications
+            context.chat_data['chat_id'] = update.message.chat_id
+            # Start a background thread to check status
+            threading.Thread(target=status_monitor, args=(context, pickid)).start()
         else:
             await update.message.reply_text("❌ Failed to send pick to SmartBet.io.")
+
+# === BACKGROUND STATUS MONITOR ===
+def status_monitor(context, pickid):
+    chat_id = context.chat_data.get('chat_id')
+    if not chat_id:
+        return
+    class DummyBot:
+        bot = context.application
+        chat_id = chat_id
+
+    # Check pick status every CHECK_INTERVAL seconds, 5 times
+    for _ in range(5):
+        check_pick_status(DummyBot, pickid)
+        time.sleep(CHECK_INTERVAL)
 
 # === START FLASK + TELEGRAM BOT ===
 if __name__ == '__main__':
     # Run Flask in a background thread
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))).start()
 
-    # Run Telegram bot in the main thread
+    # Run Telegram bot in main thread
     application = Application.builder().token(BOT_TOKEN).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("🤖 Telegram bot is running...")
