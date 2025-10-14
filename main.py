@@ -1,27 +1,28 @@
 import os
+import json
 import smtplib
-from email.mime.text import MIMEText
-import threading
+from email.message import EmailMessage
 from flask import Flask, request
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")           # Your Gmail address (environment variable)
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD") # Your Gmail App Password (environment variable)
+GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 SMARTBET_EMAIL = "picks@smartbet.io"
-SOURCE = os.getenv("SOURCE", "Kakason08")           # SmartBet.io source
-STAKE = "5"
+
+SPORT = "Football"
+STAKE = 5
 BOOK = "Pinnacle"
-SPORT_DEFAULT = "Football"
+SOURCE = os.getenv("SOURCE", "Kakason08")  # Your SmartBet.io source
 
-# === FLASK HEALTH CHECK ===
+LOG_FILE = os.getenv("LOG_FILE", "smartbet_picks.log")
+
+# === FLASK APP ===
 app = Flask(__name__)
-
-@app.route('/')
-def index():
-    return "Bot is running", 200
+bot = Bot(token=BOT_TOKEN)
+application = Application.builder().bot(bot).build()
 
 # === PARSE TELEGRAM ALERT ===
 def parse_alert(message_text):
@@ -32,7 +33,7 @@ def parse_alert(message_text):
     # Bet type
     for line in lines:
         if line.lower().startswith("bet :"):
-            bet = line.split(":")[1].strip()
+            bet = line.split(":", 1)[1].strip()
             break
 
     # Event
@@ -41,39 +42,37 @@ def parse_alert(message_text):
             event = line.strip().replace(" vs ", " - ").replace(" VS ", " - ")
             break
 
-    return {
-        "sport": SPORT_DEFAULT,
-        "event": event or "Unknown Event",
-        "bet": bet or "UNKNOWN",
-        "stake": STAKE,
-        "book": BOOK,
-        "source": SOURCE,
-        "odds": "1.0"  # Let SmartBet.io use live Pinnacle odds
-    }
+    return {"event": event or "Unknown Event", "bet": bet or "UNKNOWN"}
 
-# === SEND EMAIL TO SMARTBET.IO ===
-def send_email_pick(pick):
-    body = f"""SPORT: {pick['sport']}
-EVENT: {pick['event']}
-BET: {pick['bet']}
-ODDS: {pick['odds']}
-STAKE: {pick['stake']}
-BOOK: {pick['book']}
-SOURCE: {pick['source']}
+# === SEND PICK VIA EMAIL ===
+def send_pick_email(event, bet):
+    body = f"""SPORT: {SPORT}
+EVENT: {event}
+BET: {bet}
+ODDS: 1.0
+STAKE: {STAKE}
+BOOK: {BOOK}
+SOURCE: {SOURCE}
 """
-    msg = MIMEText(body)
-    msg['Subject'] = f"New Pick: {pick['event']} - {pick['bet']}"
-    msg['From'] = GMAIL_ADDRESS
-    msg['To'] = SMARTBET_EMAIL
-
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_ADDRESS, SMARTBET_EMAIL, msg.as_string())
-        print(f"✅ Pick sent via email to SmartBet.io:\n{body}")
+        msg = EmailMessage()
+        msg.set_content(body)
+        msg["Subject"] = f"SmartBet.io Pick - {event}"
+        msg["From"] = GMAIL_ADDRESS
+        msg["To"] = SMARTBET_EMAIL
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            smtp.send_message(msg)
+
+        # Log the pick
+        with open(LOG_FILE, "a") as f:
+            f.write(json.dumps({"event": event, "bet": bet}) + "\n")
+
+        print(f"✅ Pick sent via email: {body}")
         return True
     except Exception as e:
-        print(f"❌ Failed to send pick: {e}")
+        print(f"❌ Error sending email: {e}")
         return False
 
 # === TELEGRAM HANDLER ===
@@ -82,20 +81,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
     if "Bet :" in text:
-        pick = parse_alert(text)
-        success = send_email_pick(pick)
+        alert_data = parse_alert(text)
+        success = send_pick_email(alert_data["event"], alert_data["bet"])
         if success:
             await update.message.reply_text("✅ Pick sent to SmartBet.io via email!")
         else:
-            await update.message.reply_text("❌ Failed to send pick.")
+            await update.message.reply_text("❌ Failed to send pick to SmartBet.io.")
 
-# === START FLASK + TELEGRAM BOT ===
-if __name__ == '__main__':
-    # Run Flask in a background thread
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))).start()
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Run Telegram bot in main thread
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🤖 Telegram bot is running...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+# === WEBHOOK ROUTE ===
+@app.route(f'/{BOT_TOKEN}', methods=["POST"])
+async def telegram_webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, bot)
+    await application.update_queue.put(update)
+    return "OK", 200
+
+# === HEALTH CHECK ===
+@app.route('/')
+def index():
+    return "Bot is running", 200
+
+# === START FLASK APP ===
+if __name__ == "__main__":
+    import asyncio
+
+    async def setup_webhook():
+        await bot.delete_webhook()
+        await bot.set_webhook(url=f"https://YOUR_RENDER_APP_URL/{BOT_TOKEN}")
+        print("🤖 Webhook set successfully!")
+
+    asyncio.run(setup_webhook())
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
