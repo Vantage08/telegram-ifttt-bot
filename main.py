@@ -7,51 +7,43 @@ from telegram import Bot, Update
 
 # --- Load environment variables ---
 TOKEN = os.environ.get("TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # must end with /<TOKEN>
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 
-if not TOKEN or not WEBHOOK_URL or not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
-    raise Exception("❌ Missing one or more required environment variables!")
+if not all([TOKEN, WEBHOOK_URL, GMAIL_ADDRESS, GMAIL_APP_PASSWORD]):
+    raise Exception("Missing one or more required environment variables!")
 
-# --- Initialize bot and Flask app ---
 bot = Bot(token=TOKEN)
 app = Flask(__name__)
 
-# --- Flask route that Telegram calls ---
+# --- Simple homepage route to avoid 404s ---
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ Telegram Bot is running!", 200
+
+# --- Webhook route ---
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-    if request.method == "POST":
-        update_data = request.get_json()
-        if not update_data:
-            abort(400)
-        asyncio.run(handle_update(update_data))
-        return "OK", 200
-    abort(403)
+    update_data = request.get_json(force=True)
+    if not update_data:
+        abort(400)
+    asyncio.run(handle_update(update_data))
+    return "OK", 200
 
-# --- Process Telegram updates ---
+# --- Handle incoming Telegram messages ---
 async def handle_update(update_data):
     update = Update.de_json(update_data, bot)
-    if update.message:
+    if update.message and update.message.text:
         text = update.message.text.strip()
-        chat_id = update.message.chat_id
+        send_pick_email(text)
+        await bot.send_message(chat_id=update.message.chat_id, text="✅ Pick submitted successfully!")
 
-        # Log received text
-        print(f"📩 Received from Telegram: {text}")
-
-        # Send pick to Smartbet.io via Gmail
-        try:
-            send_pick_email(text)
-            await bot.send_message(chat_id=chat_id, text="✅ Pick submitted successfully!")
-            print("📤 Email sent successfully!")
-        except Exception as e:
-            await bot.send_message(chat_id=chat_id, text=f"❌ Failed to send pick: {e}")
-            print(f"⚠️ Email sending failed: {e}")
-
-# --- Send email function ---
+# --- Send email via Gmail ---
 def send_pick_email(pick_text):
     subject = "Automated Pick Submission"
-    body = f"""SPORT: Football
+    body = f"""
+SPORT: Football
 EVENT: {pick_text}
 BET: {pick_text}
 ODDS: 1.0
@@ -68,11 +60,11 @@ SOURCE: Kakason08
         server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
         server.send_message(msg)
 
-# --- Setup webhook when app starts ---
+# --- Set webhook on startup ---
 async def setup_webhook():
     await bot.delete_webhook()
-    await bot.set_webhook(url=WEBHOOK_URL)
-    print(f"🤖 Webhook set to {WEBHOOK_URL}")
+    await bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+    print(f"🤖 Webhook set to {WEBHOOK_URL}/{TOKEN}")
 
 if __name__ == "__main__":
     asyncio.run(setup_webhook())
