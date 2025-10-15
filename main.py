@@ -2,7 +2,6 @@ from flask import Flask, request
 import requests
 import logging
 import os
-import re
 
 app = Flask(__name__)
 
@@ -24,50 +23,51 @@ def receive_update():
     logging.info(f"Received update: {data}")
 
     try:
+        # Extract message text safely
         message = data.get("message", {})
         text = message.get("text", "")
         chat_id = message.get("chat", {}).get("id")
 
         if text:
-            # Extract BET line
-            bet_match = re.search(r"Bet\s*:\s*(.+)", text, re.IGNORECASE)
-            bet = bet_match.group(1).strip() if bet_match else "Unknown Bet"
+            lines = text.splitlines()
+            bet_line = lines[0].strip() if lines else ""
+            event_line = None
 
-            # Extract EVENT line (line containing 'vs')
-            event = ""
-            for line in text.splitlines():
-                if "vs" in line:
-                    event = line.strip()
+            # Find first meaningful line after Bet line for EVENT
+            for line in lines[1:]:
+                clean_line = line.strip()
+                if clean_line and not clean_line.startswith(("🇦","🟥","🟩","🟨")):
+                    event_line = clean_line
                     break
-            if not event:
-                event = "Unknown Event"
 
-            # Build clean email body for SmartBet.io
-            email_body = (
-                f"SPORT: Football\n"
-                f"EVENT: {event}\n"
-                f"BET: {bet}\n"
-                f"ODDS: 1.03\n"
-                f"STAKE: 5\n"
-                f"BOOK: Pinnacle\n"
-                f"SOURCE: Kakason08>TelegramAlerts"
-            )
+            BET = bet_line.split("Bet :")[-1].strip() if "Bet :" in bet_line else bet_line
+            EVENT = event_line if event_line else "Unknown Event"
+
+            # Build payload for IFTTT / Gmail
+            payload = {
+                "value1": f"SPORT: Football",
+                "value2": f"EVENT: {EVENT}",
+                "value3": f"BET: {BET} ODDS: 1.03 STAKE: 5 BOOK: Pinnacle SOURCE: Kakason08>TelegramAlerts"
+            }
 
             # Send to IFTTT
-            payload = {"value1": email_body}
-            resp = requests.post(IFTTT_URL, json=payload, timeout=3)
-            logging.info(f"✅ Sent to IFTTT ({resp.status_code})")
+            r = requests.post(IFTTT_URL, json=payload, timeout=3)
+            logging.info(f"✅ Sent to IFTTT ({r.status_code})")
 
-            # Optional: reply to Telegram user
-            reply = {"chat_id": chat_id, "text": "✅ Sent to SmartBet.io!"}
+            # Optional: reply to user in Telegram
+            reply = {"chat_id": chat_id, "text": "✅ Message sent to SmartBet.io!"}
             requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=reply)
+
     except Exception as e:
         logging.error(f"Error: {e}")
 
-    return "OK", 200
+    return "OK", 200  # respond fast
 
 if __name__ == "__main__":
+    # Set webhook
     webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
     r = requests.post(f"{TELEGRAM_API_URL}/setWebhook", data={"url": webhook_url})
     logging.info(f"🌐 Webhook set to {webhook_url}")
+
+    # Run Flask app
     app.run(host="0.0.0.0", port=10000)
