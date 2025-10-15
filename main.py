@@ -1,99 +1,87 @@
-import os
-import re
-import logging
 from flask import Flask, request
 import requests
+import logging
+import os
+import re
 
 app = Flask(__name__)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
-IFTTT_WEBHOOK_URL = os.getenv("IFTTT_WEBHOOK_URL", "https://maker.ifttt.com/trigger/smartbet_alert/json")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+IFTTT_URL = os.environ.get("IFTTT_URL")
 
-# === CONFIGURATION ===
-FIXED_ODDS = "1.03"
-FIXED_STAKE = "5"
-FIXED_BOOK = "Pinnacle"
-FIXED_SOURCE = "Kakason08>TelegramAlerts"
-FIXED_SPORT = "Football"
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 logging.basicConfig(level=logging.INFO)
 
+def parse_telegram_message(text):
+    """Extract Bet and Event info from Telegram message."""
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    bet = "N/A"
+    event = "N/A"
 
-def clean_text(text: str) -> str:
-    """Remove emojis, flags, and extra symbols."""
-    text = re.sub(r"[^\x00-\x7F]+", " ", text)  # Remove non-ASCII
-    text = re.sub(r"\(.*?\)", "", text)  # Remove parentheses content
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def parse_alert(message: str) -> dict:
-    """Extract bet details from the Telegram alert."""
-    lines = message.strip().split("\n")
-    bet = ""
-    event = ""
-
-    # Find Bet line
+    # Extract BET line
     for line in lines:
         if line.lower().startswith("bet"):
-            bet = clean_text(line.split(":")[-1].strip())
-        elif "vs" in line.lower():
-            event = clean_text(line)
+            bet = line.split(":", 1)[-1].strip()
             break
 
-    return {
-        "sport": FIXED_SPORT,
-        "event": event or "Unknown Event",
-        "bet": bet or "Unknown Bet",
-        "odds": FIXED_ODDS,
-        "stake": FIXED_STAKE,
-        "book": FIXED_BOOK,
-        "source": FIXED_SOURCE,
-    }
+    # Extract EVENT (usually next line containing 'vs' or '-')
+    for line in lines:
+        if "vs" in line.lower() or "-" in line:
+            event = line.strip()
+            break
+
+    return bet, event
 
 
-def format_smartbet_email(data: dict) -> str:
-    """Format SmartBet.io email body."""
-    return (
-        f"SPORT: {data['sport']}\n"
-        f"EVENT: {data['event']}\n"
-        f"BET: {data['bet']}\n"
-        f"ODDS: {data['odds']}\n"
-        f"STAKE: {data['stake']}\n"
-        f"BOOK: {data['book']}\n"
-        f"SOURCE: {data['source']}"
-    )
+@app.route("/", methods=["GET"])
+def index():
+    return "🤖 Telegram SmartBet Bot is running!"
 
 
-@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def telegram_webhook():
-    """Handle incoming Telegram messages."""
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def receive_update():
     data = request.get_json()
+    logging.info(f"Received update: {data}")
 
-    if "message" in data and "text" in data["message"]:
-        message_text = data["message"]["text"]
+    try:
+        message = data.get("message", {})
+        text = message.get("text", "")
+        chat_id = message.get("chat", {}).get("id")
 
-        parsed = parse_alert(message_text)
-        email_body = format_smartbet_email(parsed)
+        if not text:
+            return "OK", 200
 
-        # Send to IFTTT
-        payload = {"value1": email_body}
-        requests.post(IFTTT_WEBHOOK_URL, json=payload)
+        bet, event = parse_telegram_message(text)
 
-        chat_id = data["message"]["chat"]["id"]
-        reply = f"✅ Sent to SmartBet.io (Stake: {parsed['stake']}, Odds: {parsed['odds']})"
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", params={
+        formatted_message = (
+            f"SPORT: Football\n"
+            f"EVENT: {event}\n"
+            f"BET: {bet}\n"
+            f"ODDS: 1.03\n"
+            f"STAKE: 5\n"
+            f"BOOK: Pinnacle\n"
+            f"SOURCE: Kakason08>TelegramAlerts"
+        )
+
+        payload = {"value1": formatted_message}
+        res = requests.post(IFTTT_URL, json=payload, timeout=3)
+        logging.info(f"✅ Sent to IFTTT ({res.status_code})")
+
+        reply = {
             "chat_id": chat_id,
-            "text": reply
-        })
+            "text": f"✅ Sent to SmartBet.io\n\nEvent: {event}\nBet: {bet}\nStake: 5 | Odds: 1.03"
+        }
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=reply)
 
-    return {"ok": True}
+    except Exception as e:
+        logging.error(f"Error: {e}")
 
-
-@app.route("/")
-def home():
-    return "Telegram → SmartBet.io bot is running ✅"
+    return "OK", 200
 
 
 if __name__ == "__main__":
+    webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
+    r = requests.post(f"{TELEGRAM_API_URL}/setWebhook", data={"url": webhook_url})
+    logging.info(f"🌐 Webhook set to {webhook_url}")
     app.run(host="0.0.0.0", port=10000)
