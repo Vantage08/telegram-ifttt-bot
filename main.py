@@ -16,29 +16,29 @@ logging.basicConfig(level=logging.INFO)
 
 def extract_event_and_bet(text):
     """
-    Extract the bet and event from the Telegram alert.
-    Assumes:
-    - First line starts with "Bet : ..."
-    - Event name is the line before the color arrangement (🟥🟩...).
+    Extract event name and bet from your Telegram alert.
+    Event is before the color pattern line (🟥🟩🟥🟩🟩 - 🟩🟨🟩🟥🟩)
+    Bet is on the first line after 'Bet :'
     """
     lines = text.splitlines()
+    bet_line = ""
+    event_line = ""
     
     # Extract bet
-    bet_line = next((l for l in lines if l.startswith("Bet :")), "")
-    bet = bet_line.replace("Bet :", "").strip() if bet_line else ""
-    
-    # Find event line: the line before the one that contains color blocks
-    event = ""
+    for line in lines:
+        if line.lower().startswith("bet"):
+            bet_line = line.split(":", 1)[1].strip()
+            break
+
+    # Extract event (line before the line that contains color patterns)
+    color_pattern_regex = re.compile(r"[\U0001F7E5-\U0001F7EB\U0001F7E6\U0001F7E7\U0001F7E8\U0001F7E9\- ]+")
     for i, line in enumerate(lines):
-        if re.search(r"[🟥🟩🟨🟦]", line):
-            if i > 0:
-                event = lines[i-1].strip()
-                break
-    
-    # Replace "vs" with "-"
-    event = event.replace(" vs ", " - ").replace("VS", "-").replace("Vs", "-")
-    
-    return event, bet
+        if " - " in line and any(c in line for c in "🟥🟩🟨"):
+            if i >= 1:
+                event_line = lines[i - 1].replace(" vs ", " - ").strip()
+            break
+
+    return event_line, bet_line
 
 @app.route("/", methods=["GET"])
 def index():
@@ -55,10 +55,15 @@ def receive_update():
         chat_id = message.get("chat", {}).get("id")
 
         if text:
+            # Extract event and bet
             event, bet = extract_event_and_bet(text)
+            if not event:
+                event = "Unknown Event"
+            if not bet:
+                bet = "Unknown Bet"
 
-            # Prepare multi-line email body with each parameter on its own line
-            payload_text = (
+            # Prepare email body for SmartBet.io
+            email_body = (
                 f"SPORT: Football\n"
                 f"EVENT: {event}\n"
                 f"BET: {bet}\n"
@@ -68,19 +73,15 @@ def receive_update():
                 f"SOURCE: Kakason08>TelegramAlerts"
             )
 
-            payload = {
-                "value1": payload_text,  # send everything as value1
-                "value2": "",  # optional
-                "value3": ""   # optional
-            }
-
             # Send to IFTTT
+            payload = {"value1": email_body}
             r = requests.post(IFTTT_URL, json=payload, timeout=5)
             logging.info(f"✅ Sent to IFTTT ({r.status_code})")
 
-            # Reply to user in Telegram
-            reply = {"chat_id": chat_id, "text": f"✅ Sent to SmartBet.io!\nEvent: {event}\nBet: {bet}"}
-            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=reply)
+            # Optional: reply to Telegram user
+            if chat_id:
+                reply = {"chat_id": chat_id, "text": "✅ Message sent to IFTTT!"}
+                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=reply)
     except Exception as e:
         logging.error(f"Error: {e}")
 
@@ -91,5 +92,4 @@ if __name__ == "__main__":
     webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
     r = requests.post(f"{TELEGRAM_API_URL}/setWebhook", data={"url": webhook_url})
     logging.info(f"🌐 Webhook set to {webhook_url}")
-
     app.run(host="0.0.0.0", port=10000)
