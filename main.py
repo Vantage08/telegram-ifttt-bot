@@ -1,8 +1,9 @@
 import os
 import logging
 import requests
+import asyncio
 from flask import Flask, request
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- Logging setup ---
@@ -38,7 +39,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat.id
     logger.info(f"Received message from {chat_id}: {text}")
 
-    # Example format: "Football: Arsenal vs Chelsea - Over 2.5"
+    # Extract event and bet from message like "Football: Arsenal vs Chelsea - Over 2.5"
     sport = "Football"
     event = ""
     bet = ""
@@ -63,12 +64,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = requests.post(IFTTT_URL, json=payload, timeout=10)
         if response.status_code == 200:
-            await update.message.reply_text(f"✅ Alert sent to IFTTT!\n\nEvent: {event}\nBet: {bet}")
+            await update.message.reply_text(f"✅ Sent to IFTTT!\n\nEvent: {event}\nBet: {bet}")
         else:
-            await update.message.reply_text(f"⚠️ IFTTT request failed ({response.status_code}).")
+            await update.message.reply_text(f"⚠️ IFTTT error: {response.status_code}")
     except Exception as e:
         logger.error(f"Error sending to IFTTT: {e}")
-        await update.message.reply_text("❌ Failed to send data to IFTTT.")
+        await update.message.reply_text("❌ Couldn’t reach IFTTT.")
 
 # --- Telegram bot setup ---
 application = Application.builder().token(BOT_TOKEN).build()
@@ -77,11 +78,11 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_m
 
 # --- Run bot with webhook ---
 if __name__ == "__main__":
-    logger.info("🤖 Setting up webhook...")
-    from telegram import Bot
-    bot = Bot(token=BOT_TOKEN)
-    webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
-    bot.set_webhook(url=webhook_url)
-    logger.info(f"🌐 Webhook set to {webhook_url}")
+    async def setup_webhook():
+        bot = Bot(token=BOT_TOKEN)
+        webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
+        await bot.set_webhook(url=webhook_url)
+        logger.info(f"🌐 Webhook set to {webhook_url}")
 
+    asyncio.run(setup_webhook())
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
