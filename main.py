@@ -6,7 +6,6 @@ import re
 
 app = Flask(__name__)
 
-# Telegram bot token and IFTTT webhook
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 IFTTT_URL = os.environ.get("IFTTT_URL")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -28,32 +27,19 @@ def receive_update():
         chat_id = message.get("chat", {}).get("id")
 
         if text:
-            # --- Extract parameters from Telegram alert ---
-            # Bet line (first line starting with "Bet :")
+            # Extract bet line (first line starting with "Bet :")
             bet_match = re.search(r"Bet\s*:\s*(.+)", text)
             bet_str = bet_match.group(1).strip() if bet_match else "Unknown"
 
             # Event line is always before the color line (🟥🟩...)
             event_match = re.search(r"\n(.+?)\n[🟥🟩🟨\-]+", text, re.DOTALL)
             event_str = event_match.group(1).strip() if event_match else "Unknown"
-            # Replace "vs" with "-" in event
             event_str = event_str.replace("vs", "-").replace("\n", " ")
 
-            # Build the email body
-            email_body = (
-                f"SPORT: Football\n"
-                f"EVENT: {event_str}\n"
-                f"BET: {bet_str}\n"
-                f"ODDS: 1.03\n"
-                f"STAKE: 5\n"
-                f"BOOK: Pinnacle\n"
-                f"SOURCE: Kakason08>TelegramAlerts"
-            )
-
-            # --- Send to IFTTT ---
+            # Send to IFTTT with Value1=event, Value2=bet
             payload = {
-                "value1": email_body,
-                "value2": "",
+                "value1": event_str,
+                "value2": bet_str,
                 "value3": ""
             }
             r = requests.post(IFTTT_URL, json=payload, timeout=3)
@@ -66,10 +52,9 @@ def receive_update():
     except Exception as e:
         logging.error(f"Error: {e}")
 
-    return "OK", 200  # respond fast
+    return "OK", 200
 
 if __name__ == "__main__":
-    # Set webhook
     webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
     r = requests.post(f"{TELEGRAM_API_URL}/setWebhook", data={"url": webhook_url})
     logging.info(f"🌐 Webhook set to {webhook_url}")
