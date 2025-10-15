@@ -1,78 +1,57 @@
-from flask import Flask, request
 import os
-import smtplib
-from email.mime.text import MIMEText
+import asyncio
+from flask import Flask, request
 from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Environment variables
+# Load environment variables
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", f"https://telegram-ifttt-bot.onrender.com/{TOKEN}")
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+WEBHOOK_URL = "https://telegram-ifttt-bot.onrender.com"  # your Render URL (no trailing slash)
 
-bot = Bot(token=TOKEN)
+# Flask app
 app = Flask(__name__)
 
-# ========== SMARTBET.IO EMAIL FUNCTION ==========
-def send_to_smartbet(sport, event, bet, odds, stake, book, source):
-    body = f"""SPORT: {sport}
-EVENT: {event}
-BET: {bet}
-ODDS: {odds}
-STAKE: {stake}
-BOOK: {book}
-SOURCE: {source}"""
-    msg = MIMEText(body)
-    msg["Subject"] = "New SmartBet Pick"
-    msg["From"] = GMAIL_ADDRESS
-    msg["To"] = "picks@smartbet.io"
+# Initialize bot and telegram application
+bot = Bot(token=TOKEN)
+application = Application.builder().token(TOKEN).build()
 
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.send_message(msg)
-        print("✅ Email sent to SmartBet.io successfully.")
-    except Exception as e:
-        print(f"❌ Email sending failed: {e}")
+# --- Handlers ---
 
-# ========== TELEGRAM WEBHOOK HANDLER ==========
-@app.route(f"/{TOKEN}", methods=["POST"])
-def receive_update():
-    try:
-        update = Update.de_json(request.get_json(force=True), bot)
-        message = update.message.text if update.message else None
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply when /start is sent."""
+    await update.message.reply_text("👋 Hello! Your bot is live and connected successfully!")
 
-        if message:
-            # Example alert message: "Football - Victoria Hamburg - Osdorf - Over 0.5"
-            parts = message.split(" - ")
-            if len(parts) >= 4:
-                sport = parts[0]
-                event = parts[1] + " - " + parts[2]
-                bet = parts[3]
-                odds = "1.0"
-                stake = "5"
-                book = "PINNACLE"
-                source = "Kakason08"
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Echo any message sent to the bot."""
+    user_message = update.message.text
+    await update.message.reply_text(f"✅ Received: {user_message}")
 
-                send_to_smartbet(sport, event, bet, odds, stake, book, source)
-                bot.send_message(chat_id=update.message.chat_id, text="✅ Pick sent to SmartBet.io successfully!")
-            else:
-                bot.send_message(chat_id=update.message.chat_id, text="⚠️ Invalid pick format.")
-        return "ok", 200
+# Register handlers
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        return "error", 500
+# --- Flask routes ---
 
+@app.route('/')
+def index():
+    return "🤖 Telegram bot is running!", 200
 
-# ========== MAIN ==========
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    """Receive updates from Telegram"""
+    update = Update.de_json(request.get_json(force=True), bot)
+    asyncio.run(application.process_update(update))
+    return "OK", 200
+
+# --- Webhook setup ---
+async def setup_webhook():
+    """Set Telegram webhook asynchronously"""
+    await bot.delete_webhook()
+    await bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+    print(f"🤖 Webhook set to {WEBHOOK_URL}/{TOKEN}")
+
+# --- Main entry point ---
 if __name__ == "__main__":
-    try:
-        bot.delete_webhook()
-        bot.set_webhook(url=WEBHOOK_URL)
-        print(f"🤖 Webhook set to {WEBHOOK_URL}")
-    except Exception as e:
-        print(f"⚠️ Webhook setup failed: {e}")
-
-    print("🌐 Telegram bot is running...")
+    asyncio.run(setup_webhook())
+    print("🌐 Telegram bot is running on Render...")
     app.run(host="0.0.0.0", port=10000)
