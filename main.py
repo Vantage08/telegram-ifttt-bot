@@ -1,72 +1,87 @@
 import os
-import smtplib
-from email.mime.text import MIMEText
-from flask import Flask, request, abort
-import asyncio
-from telegram import Bot, Update
+import logging
+import requests
+from flask import Flask, request
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
+# --- Logging setup ---
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Load environment variables ---
-TOKEN = os.environ.get("TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+IFTTT_URL = os.getenv("IFTTT_URL")
 
-if not all([TOKEN, WEBHOOK_URL, GMAIL_ADDRESS, GMAIL_APP_PASSWORD]):
-    raise Exception("Missing one or more required environment variables!")
+if not BOT_TOKEN or not IFTTT_URL:
+    raise Exception("❌ Missing environment variables! Please set BOT_TOKEN and IFTTT_URL in Render.")
 
-bot = Bot(token=TOKEN)
+# --- Flask app ---
 app = Flask(__name__)
 
-# --- Simple homepage route to avoid 404s ---
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
-    return "✅ Telegram Bot is running!", 200
+    return "✅ Telegram ↔ IFTTT Bot is running!", 200
 
-# --- Webhook route ---
-@app.route(f"/{TOKEN}", methods=["POST"])
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    update_data = request.get_json(force=True)
-    if not update_data:
-        abort(400)
-    asyncio.run(handle_update(update_data))
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
     return "OK", 200
 
-# --- Handle incoming Telegram messages ---
-async def handle_update(update_data):
-    update = Update.de_json(update_data, bot)
-    if update.message and update.message.text:
-        text = update.message.text.strip()
-        send_pick_email(text)
-        await bot.send_message(chat_id=update.message.chat_id, text="✅ Pick submitted successfully!")
+# --- Telegram bot handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Hello! Send me your betting alert message and I’ll forward it to IFTTT.")
 
-# --- Send email via Gmail ---
-def send_pick_email(pick_text):
-    subject = "Automated Pick Submission"
-    body = f"""
-SPORT: Football
-EVENT: {pick_text}
-BET: {pick_text}
-ODDS: 1.0
-STAKE: 5
-BOOK: Pinnacle
-SOURCE: Kakason08
-"""
-    msg = MIMEText(body)
-    msg["From"] = GMAIL_ADDRESS
-    msg["To"] = "picks@smartbet.io"
-    msg["Subject"] = subject
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    chat_id = update.message.chat.id
+    logger.info(f"Received message from {chat_id}: {text}")
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        server.send_message(msg)
+    # Example format: "Football: Arsenal vs Chelsea - Over 2.5"
+    sport = "Football"
+    event = ""
+    bet = ""
 
-# --- Set webhook on startup ---
-async def setup_webhook():
-    await bot.delete_webhook()
-    await bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
-    print(f"🤖 Webhook set to {WEBHOOK_URL}/{TOKEN}")
+    if ":" in text:
+        parts = text.split(":", 1)
+        sport = parts[0].strip()
+        remaining = parts[1].strip()
+        if "-" in remaining:
+            event, bet = remaining.split("-", 1)
+            event = event.strip()
+            bet = bet.strip()
+        else:
+            event = remaining
 
+    payload = {
+        "value1": event,
+        "value2": bet,
+        "value3": sport
+    }
+
+    try:
+        response = requests.post(IFTTT_URL, json=payload, timeout=10)
+        if response.status_code == 200:
+            await update.message.reply_text(f"✅ Alert sent to IFTTT!\n\nEvent: {event}\nBet: {bet}")
+        else:
+            await update.message.reply_text(f"⚠️ IFTTT request failed ({response.status_code}).")
+    except Exception as e:
+        logger.error(f"Error sending to IFTTT: {e}")
+        await update.message.reply_text("❌ Failed to send data to IFTTT.")
+
+# --- Telegram bot setup ---
+application = Application.builder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# --- Run bot with webhook ---
 if __name__ == "__main__":
-    asyncio.run(setup_webhook())
-    print("🌐 Telegram bot is running on Render...")
+    logger.info("🤖 Setting up webhook...")
+    from telegram import Bot
+    bot = Bot(token=BOT_TOKEN)
+    webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
+    bot.set_webhook(url=webhook_url)
+    logger.info(f"🌐 Webhook set to {webhook_url}")
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
