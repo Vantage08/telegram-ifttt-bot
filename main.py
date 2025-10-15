@@ -19,7 +19,7 @@ def extract_event_and_bet(text):
     Extract the bet and event from the Telegram alert.
     Assumes:
     - First line starts with "Bet : ..."
-    - Event name is the line **before** the color arrangement (🟥🟩...).
+    - Event name is the line before the color arrangement (🟥🟩...).
     """
     lines = text.splitlines()
     
@@ -57,10 +57,21 @@ def receive_update():
         if text:
             event, bet = extract_event_and_bet(text)
 
+            # Prepare multi-line email body with each parameter on its own line
+            payload_text = (
+                f"SPORT: Football\n"
+                f"EVENT: {event}\n"
+                f"BET: {bet}\n"
+                f"ODDS: 1.03\n"
+                f"STAKE: 5\n"
+                f"BOOK: Pinnacle\n"
+                f"SOURCE: Kakason08>TelegramAlerts"
+            )
+
             payload = {
-                "value1": "Football",  # SPORT
-                "value2": event,       # EVENT
-                "value3": bet          # BET
+                "value1": payload_text,  # send everything as value1
+                "value2": "",  # optional
+                "value3": ""   # optional
             }
 
             # Send to IFTTT
