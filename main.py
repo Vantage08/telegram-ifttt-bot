@@ -57,7 +57,7 @@ def webhook():
 # --- Set webhook on startup ---
 async def setup_webhook():
     await bot.delete_webhook()
-    await bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+    await bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")  # << keep only this once!
     print(f"🤖 Webhook set to {WEBHOOK_URL}/{TOKEN}")
 
 if __name__ == "__main__":
