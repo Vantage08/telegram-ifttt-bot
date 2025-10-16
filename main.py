@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 @app.route("/", methods=["GET"])
 def index():
-    return "ðŸ¤– Telegram IFTTT Bot is running!"
+    return "🤖 Telegram IFTTT Bot is running!"
 
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def receive_update():
@@ -24,50 +24,54 @@ def receive_update():
     logging.info(f"Received update: {data}")
 
     try:
-        # Extract message text safely
         message = data.get("message", {})
         text = message.get("text", "")
         chat_id = message.get("chat", {}).get("id")
 
-        if text:
-            # --- Extract EVENT and BET from alert ---
-            # Event line is before the color line (ðŸŸ¥ðŸŸ©ðŸŸ¨...)
-            event_block_match = re.search(r"\n(.+?)\n[ðŸŸ¥ðŸŸ©ðŸŸ¨\-]+", text, re.DOTALL)
-            event_block = event_block_match.group(1).strip() if event_block_match else "Unknown"
+        if not text:
+            return "No text", 200
 
-            event_lines = event_block.split("\n")
-            if len(event_lines) >= 2:
-                event_str = event_lines[1].replace("vs", "-").strip()  # Match only
-            else:
-                event_str = event_lines[0].replace("vs", "-").strip()
+        # --- Extract EVENT ---
+        # Event line is always the one before the color emoji line
+        # The color line usually contains 🟥🟩🟨🟦 etc.
+        event_match = re.search(r"([^\n]+)\n[🟥🟩🟨🟦🟧🟪🟫⬜⬛\- ]+", text)
+        event_str = event_match.group(1).strip() if event_match else "Unknown Event"
 
-            # BET is on the first line after "Bet :"
-            bet_match = re.search(r"Bet\s*:\s*(.+)", text)
-            bet_str = bet_match.group(1).strip() if bet_match else "Unknown"
+        # Replace "vs" (in any case) with "-"
+        event_str = re.sub(r"\bvs\b", "-", event_str, flags=re.IGNORECASE)
 
-            # --- Prepare payload for IFTTT ---
-            payload = {
-                "value1": event_str,  # EVENT
-                "value2": bet_str,    # BET
-                "value3": "Football"  # SPORT (constant)
-            }
+        # --- Extract BET ---
+        bet_match = re.search(r"Bet\s*:\s*(.+)", text, re.IGNORECASE)
+        bet_str = bet_match.group(1).strip() if bet_match else "Unknown Bet"
 
-            # Send to IFTTT
-            requests.post(IFTTT_URL, json=payload, timeout=3)
-            logging.info("âœ… Sent to IFTTT")
+        # --- Prepare payload for IFTTT ---
+        payload = {
+            "value1": event_str,  # EVENT
+            "value2": bet_str,    # BET
+            "value3": "Football"  # SPORT (constant)
+        }
 
-            # Optional: reply to user in Telegram
-            reply = {"chat_id": chat_id, "text": "âœ… Message sent to IFTTT!"}
-            requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=reply)
+        # --- Send to IFTTT ---
+        try:
+            res = requests.post(IFTTT_URL, json=payload, timeout=3)
+            logging.info(f"✅ Sent to IFTTT: {payload}, response={res.status_code}")
+        except Exception as err:
+            logging.error(f"IFTTT error: {err}")
+
+        # --- Reply to Telegram ---
+        reply_text = f"✅ Sent to IFTTT!\nEvent: {event_str}\nBet: {bet_str}"
+        requests.post(f"{TELEGRAM_API_URL}/sendMessage", json={"chat_id": chat_id, "text": reply_text})
+
     except Exception as e:
         logging.error(f"Error: {e}")
 
-    return "OK", 200  # respond fast
+    return "OK", 200
+
 
 if __name__ == "__main__":
-    # Set webhook
+    # Set webhook automatically
     webhook_url = f"https://telegram-ifttt-bot.onrender.com/{BOT_TOKEN}"
     r = requests.post(f"{TELEGRAM_API_URL}/setWebhook", data={"url": webhook_url})
-    logging.info(f"ðŸŒ Webhook set to {webhook_url}")
+    logging.info(f"🌐 Webhook set to {webhook_url}")
 
     app.run(host="0.0.0.0", port=10000)
